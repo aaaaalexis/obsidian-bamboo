@@ -3,7 +3,9 @@
   "name": "Bamboo",
   "version": "1.0.0",
   "minAppVersion": "1.0.0",
-  "description": "CJK-aware word splitting and selection.",
+  "description": "Enable proper word selection for Chinese, Japanese, and Korean (CJK) text.",
   "author": "Alexis C",
+  "authorUrl": "https://github.com/aaaaalexis",
+  "fundingUrl": "https://www.buymeacoffee.com/sevenaxis",
   "isDesktopOnly": false
 }
