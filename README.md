@@ -2,9 +2,7 @@
 
 > _Bamboo splits cleanly at its nodes, so should your words._
 
-Obsidian's editor has no concept of word boundaries in Chinese, Japanese and Korean.
-
-Bamboo patches the underlying editor to use proper word segmentation for CJK text, so those operations behave consistently regardless of the script you're writing in.
+**Bamboo** patches Obsidian's built-in CodeMirror editor to use proper word segmentation for Chinese, Japanese, and Korean (CJK) text.
 
 ## Comparison
 
