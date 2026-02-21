@@ -1,0 +1,9 @@
+{
+  "id": "bamboo",
+  "name": "Bamboo",
+  "version": "1.0.0",
+  "minAppVersion": "1.8.0",
+  "description": "CJK-aware word splitting and selection.",
+  "author": "Alexis C",
+  "isDesktopOnly": false
+}
