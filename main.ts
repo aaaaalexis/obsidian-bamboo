@@ -1,141 +1,9 @@
 import { EditorSelection, EditorState, Extension, Prec } from "@codemirror/state";
 import { EditorView, keymap, type MouseSelectionStyle } from "@codemirror/view";
 import { Plugin } from "obsidian";
+import { findSegmentAt, isCjk, runHasCjk, type Segment, SegmenterService } from "./segmenter";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-type Segment = {
-  from: number;
-  to: number;
-  isWordLike: boolean;
-  text: string;
-};
-
-type SegmenterToken = {
-  segment: string;
-  index: number;
-  isWordLike?: boolean;
-};
-
-type WordSegmenter = {
-  segment(input: string): Iterable<SegmenterToken>;
-};
-
-// ─── CJK detection ───────────────────────────────────────────────────────────
-
-const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const JA_CHAR = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
-const KO_CHAR = /[\p{Script=Hangul}]/u;
-
-function isCjk(ch: string): boolean {
-  return CJK_CHAR.test(ch);
-}
-
-// ─── Fallback segmentation regexes (module-level to avoid re-construction) ────
-
-/** Tokenises a line into CJK runs, word/number runs, whitespace, and single punctuation chars. */
-const FALLBACK_SEGMENT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[\p{Letter}\p{Number}_]+|\s+|[^\s]/gu;
-/** Matches a string that contains *no* word-like characters (pure punctuation / whitespace). */
-const FALLBACK_ISWORD_RE = /^[^\p{Letter}\p{Number}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}_]+$/u;
-
-// ─── SegmenterService ─────────────────────────────────────────────────────────
-
-class SegmenterService {
-  // 128 entries cover typical CJK editing sessions without excessive memory use
-  private static readonly CACHE_MAX = 128;
-  private readonly segmenters: Partial<Record<string, WordSegmenter>> = {};
-  private readonly hasIntlSegmenter: boolean;
-  // Map preserves insertion order; delete+reinsert on hit gives O(1) LRU
-  private readonly cache = new Map<string, Segment[]>();
-
-  constructor() {
-    const IntlAny = Intl as unknown as {
-      Segmenter?: new (locale: string, options: { granularity: "word" }) => WordSegmenter;
-    };
-    if (IntlAny.Segmenter) {
-      for (const locale of ["zh", "ja", "ko"] as const) {
-        this.segmenters[locale] = new IntlAny.Segmenter(locale, { granularity: "word" });
-      }
-      this.hasIntlSegmenter = true;
-    } else {
-      this.hasIntlSegmenter = false;
-    }
-  }
-
-  /** Pick the best locale for a text snippet based on script presence. */
-  private localeFor(text: string): string {
-    if (JA_CHAR.test(text)) return "ja";
-    if (KO_CHAR.test(text)) return "ko";
-    return "zh";
-  }
-
-  lineSegments(text: string): Segment[] {
-    // LRU hit: refresh position by delete+reinsert
-    const hit = this.cache.get(text);
-    if (hit) {
-      this.cache.delete(text);
-      this.cache.set(text, hit);
-      return hit;
-    }
-
-    const raw = this.hasIntlSegmenter ? this.segmentWithIntl(text) : this.segmentWithFallback(text);
-    // Guarantee at least one segment so callers never receive an empty array
-    const segments = raw.length === 0 && text.length > 0 ? [{ from: 0, to: text.length, isWordLike: true, text }] : raw;
-
-    // Evict oldest entry when at capacity
-    if (this.cache.size >= SegmenterService.CACHE_MAX) {
-      const oldest = this.cache.keys().next().value;
-      if (typeof oldest === "string") this.cache.delete(oldest);
-    }
-    this.cache.set(text, segments);
-    return segments;
-  }
-
-  private segmentWithIntl(text: string): Segment[] {
-    const locale = this.localeFor(text);
-    const segmenter = this.segmenters[locale]!;
-    const out: Segment[] = [];
-    for (const token of segmenter.segment(text)) {
-      const from = token.index;
-      const to = from + token.segment.length;
-      if (from === to) continue;
-      out.push({ from, to, isWordLike: Boolean(token.isWordLike), text: token.segment });
-    }
-    return out;
-  }
-
-  private segmentWithFallback(text: string): Segment[] {
-    const out: Segment[] = [];
-    // matchAll returns a fresh stateful iterator per call without mutating the regex,
-    // so the shared module-level instance is safe to use concurrently.
-    for (const match of text.matchAll(FALLBACK_SEGMENT_RE)) {
-      const segText = match[0];
-      const from = match.index ?? 0;
-      const to = from + segText.length;
-      // A segment is word-like unless it is entirely punctuation/whitespace
-      const isWordLike = !FALLBACK_ISWORD_RE.test(segText);
-      out.push({ from, to, isWordLike, text: segText });
-    }
-    return out;
-  }
-}
-
-// ─── Core helpers ─────────────────────────────────────────────────────────────
-
-/**
- * Find the segment that contains `localPos` within an already-tokenised line.
- * Primary pass: half-open [from, to) — forward-biased at exact boundaries.
- * Fallback pass: cursor sits exactly at a segment's `to` (e.g. end-of-line).
- */
-function findSegmentAt(segments: Segment[], localPos: number): Segment | undefined {
-  for (const seg of segments) {
-    if (localPos >= seg.from && localPos < seg.to) return seg;
-  }
-  for (let i = segments.length - 1; i >= 0; i--) {
-    if (segments[i]!.to === localPos) return segments[i];
-  }
-  return undefined;
-}
+// ─── CM6-bound helpers ────────────────────────────────────────────────────────
 
 function segmentAt(state: EditorView["state"], service: SegmenterService, pos: number): { lineFrom: number; lineTo: number; segment: Segment } | null {
   const line = state.doc.lineAt(pos);
@@ -144,10 +12,9 @@ function segmentAt(state: EditorView["state"], service: SegmenterService, pos: n
   return seg ? { lineFrom: line.from, lineTo: line.to, segment: seg } : null;
 }
 
-function hasCjkAround(state: EditorView["state"], pos: number): boolean {
-  // Single slice (≤ 2 chars) covering both neighbours — avoids two separate doc reads
-  const neighbourhood = state.sliceDoc(Math.max(0, pos - 1), Math.min(state.doc.length, pos + 1));
-  return CJK_CHAR.test(neighbourhood);
+function hasCjkAround(state: EditorView["state"], pos: number, direction: 1 | -1 | 0 = 0): boolean {
+  const line = state.doc.lineAt(pos);
+  return runHasCjk(line.text, pos - line.from, direction);
 }
 
 /**
@@ -197,7 +64,7 @@ function nextBoundary(state: EditorView["state"], service: SegmenterService, pos
 function moveGroupBySegmenter(service: SegmenterService, direction: 1 | -1, extend: boolean) {
   return (view: EditorView): boolean => {
     const { state } = view;
-    if (!hasCjkAround(state, state.selection.main.head)) return false;
+    if (!hasCjkAround(state, state.selection.main.head, direction)) return false;
 
     const prev = state.selection;
     const nextRanges = prev.ranges.map((range) => {
@@ -223,7 +90,7 @@ function moveGroupBySegmenter(service: SegmenterService, direction: 1 | -1, exte
 function deleteWordBySegmenter(service: SegmenterService, direction: 1 | -1) {
   return (view: EditorView): boolean => {
     const { state } = view;
-    if (!hasCjkAround(state, state.selection.main.head)) return false;
+    if (!hasCjkAround(state, state.selection.main.head, direction)) return false;
 
     const changes = state.changeByRange((range) => {
       // If something is already selected, just delete the selection
@@ -341,10 +208,11 @@ export default class BambooPlugin extends Plugin {
       const line = this.doc.lineAt(pos);
       const localPos = pos - line.from;
 
-      // Fast-path: skip CJK logic if neither neighbor is CJK
-      const leftCh = localPos > 0 ? line.text[localPos - 1] : "";
-      const rightCh = localPos < line.text.length ? line.text[localPos] : "";
-      if (!isCjk(leftCh ?? "") && !isCjk(rightCh ?? "")) {
+      // Fast-path: skip CJK logic if the surrounding non-whitespace run has no CJK.
+      // Checking only the adjacent chars misses mixed words like `中文asdf` where
+      // a click/select on the Latin tail would otherwise fall back to the original
+      // wordAt and return the whole mixed run.
+      if (!runHasCjk(line.text, localPos)) {
         return original.call(this, pos);
       }
 
