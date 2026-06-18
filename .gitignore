@@ -1,7 +1,6 @@
 # npm
+main.js
 node_modules
-package-lock.json
-# yarn.lock
 
 # build
 build

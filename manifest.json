@@ -2,10 +2,10 @@
   "id": "bamboo",
   "name": "Bamboo",
   "version": "1.0.0",
-  "minAppVersion": "1.0.0",
-  "description": "Enable proper word selection for Chinese, Japanese, and Korean (CJK) text.",
+  "minAppVersion": "1.6.0",
+  "description": "Enable proper word selection for Chinese, Japanese, and Korean text.",
   "author": "Alexis C",
   "authorUrl": "https://github.com/aaaaalexis",
-  "fundingUrl": "https://www.buymeacoffee.com/sevenaxis",
+  "fundingUrl": "https://www.buymeacoffee.com/svnaxis",
   "isDesktopOnly": false
 }
